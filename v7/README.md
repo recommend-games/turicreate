@@ -71,3 +71,31 @@ Exact scaling may differ from Turi’s C++ implementation; this package does not
 ```bash
 cd v7 && pytest
 ```
+
+## Parity with Turi C++
+
+Use the parity harness to compare behavior against Turi Create on the same data split.
+
+- Protocol: `v7/tests/parity_protocol.md`
+- Runner: `v7/tests/parity_harness.py`
+- Metrics: `v7/tests/parity_metrics.py`
+- Gate: `v7/tests/parity_gate.py`
+
+Example:
+
+```bash
+cd v7
+python tests/parity_harness.py \
+  --data /path/to/data.ndjson \
+  --user-col user_id \
+  --item-col item_id \
+  --target-col rating \
+  --seed 0 \
+  --out tests/baselines/latest_parity_metrics.json
+
+python tests/parity_gate.py \
+  --report tests/baselines/latest_parity_metrics.json \
+  --thresholds tests/baselines/thresholds.json
+```
+
+Note: parity checks require `turicreate` to be importable in the runtime environment.
