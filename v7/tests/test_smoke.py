@@ -83,3 +83,34 @@ def test_binary_target_rejected() -> None:
     df = pl.DataFrame({"user_id": [1], "item_id": [2], "rating": [3.0]})
     with pytest.raises(NotImplementedError):
         create(df, target="rating", binary_target=True, max_iterations=1, verbose=False)
+
+
+def test_loss_weights_and_ranking_reduce(tiny_df: pl.DataFrame) -> None:
+    m = create(
+        tiny_df,
+        target="rating",
+        max_iterations=2,
+        verbose=False,
+        random_seed=1,
+        observation_loss_weight=0.5,
+        ranking_loss_weight=2.0,
+        l2_loss_weight=1.5,
+        ranking_loss_reduce="batch_mean",
+    )
+    hp = m.hyperparams
+    assert hp["observation_loss_weight"] == 0.5
+    assert hp["ranking_loss_weight"] == 2.0
+    assert hp["l2_loss_weight"] == 1.5
+    assert hp["ranking_loss_reduce"] == "batch_mean"
+    assert len(m.predict(tiny_df)) == tiny_df.height
+
+
+def test_negative_loss_weight_raises(tiny_df: pl.DataFrame) -> None:
+    with pytest.raises(ValueError, match="Loss weights"):
+        create(
+            tiny_df,
+            target="rating",
+            max_iterations=1,
+            verbose=False,
+            observation_loss_weight=-1.0,
+        )

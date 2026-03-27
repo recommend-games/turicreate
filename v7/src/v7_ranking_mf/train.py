@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Union
+from typing import Any, Dict, List, Literal, Optional, Set, Union
 
 import lightning as L
 import polars as pl
@@ -140,16 +140,41 @@ def create(
     invalid_target_action: str = "error",
     accelerator: str = "auto",
     devices: Union[int, str] = 1,
+    observation_loss_weight: float = 1.0,
+    ranking_loss_weight: float = 1.0,
+    l2_loss_weight: float = 1.0,
+    ranking_loss_reduce: Literal["valid_mean", "batch_mean"] = "valid_mean",
 ) -> RankingFactorizationRecommender:
     """
     Train a biased matrix factorization model with ranking regularization.
 
     ``binary_target`` and ``solver`` are accepted for API symmetry with Turi Create
     but are ignored (only non-binary explicit ratings are supported).
+
+    Notes
+    -----
+    **Approximating Turi Create's RankingFactorizationRecommender (explicit ratings,
+    user/item/target only).** The model and ranking term (hard negative among K
+    unseen items, squared to ``unobserved_rating_value``) match the same intent as
+    Turi, but optimization differs (Adam vs SGD/Adagrad, how L2 couples to ranking
+    steps, batch scaling). Identical weights or rankings should not be expected.
+    For behaviorally similar results, tune on a validation metric (RMSE, overlap@K,
+    etc.): learning rate (``sgd_step_size``), ``ranking_regularization``, both L2
+    settings, ``num_sampled_negative_examples``, and ``max_iterations``. Use
+    ``observation_loss_weight``, ``ranking_loss_weight``, and ``l2_loss_weight`` to
+    rebalance terms if needed. ``ranking_loss_reduce='batch_mean'`` averages the
+    ranking MSE over the full mini-batch (zero contribution for rows with no valid
+    negatives), which can change the effective strength of ``ranking_regularization``
+    relative to the observation term compared to ``'valid_mean'`` (default).
     """
     _ = solver  # API compatibility; training always uses Adam
     if binary_target:
         raise NotImplementedError("binary_target=True is not supported in v7.")
+
+    if observation_loss_weight < 0 or ranking_loss_weight < 0 or l2_loss_weight < 0:
+        raise ValueError("Loss weights must be non-negative.")
+    if ranking_loss_reduce not in ("valid_mean", "batch_mean"):
+        raise ValueError("ranking_loss_reduce must be 'valid_mean' or 'batch_mean'.")
 
     if target is None:
         raise ValueError("target must be the name of the explicit rating column.")
@@ -201,6 +226,10 @@ def create(
         linear_regularization=linear_regularization,
         learning_rate=lr,
         random_seed=random_seed,
+        observation_loss_weight=observation_loss_weight,
+        ranking_loss_weight=ranking_loss_weight,
+        l2_loss_weight=l2_loss_weight,
+        ranking_loss_reduce=ranking_loss_reduce,
     )
 
     train_loader = make_train_dataloader(
@@ -237,6 +266,10 @@ def create(
         "sgd_step_size": sgd_step_size,
         "learning_rate_used": lr,
         "random_seed": random_seed,
+        "observation_loss_weight": observation_loss_weight,
+        "ranking_loss_weight": ranking_loss_weight,
+        "l2_loss_weight": l2_loss_weight,
+        "ranking_loss_reduce": ranking_loss_reduce,
     }
 
     return RankingFactorizationRecommender(

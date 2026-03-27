@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import List, Set
+from typing import List, Literal, Set
 
 import numpy as np
 import torch
@@ -27,6 +27,10 @@ class BiasedMFLightningModule(LightningModule):
         linear_regularization: float,
         learning_rate: float,
         random_seed: int,
+        observation_loss_weight: float = 1.0,
+        ranking_loss_weight: float = 1.0,
+        l2_loss_weight: float = 1.0,
+        ranking_loss_reduce: Literal["valid_mean", "batch_mean"] = "valid_mean",
     ) -> None:
         super().__init__()
         self.save_hyperparameters(ignore=["user_seen"])
@@ -106,6 +110,11 @@ class BiasedMFLightningModule(LightningModule):
         pred = self(user_idx, item_idx)
         loss_obs = F.mse_loss(pred, rating)
 
+        w_obs = self.hparams.observation_loss_weight
+        w_rank = self.hparams.ranking_loss_weight
+        w_l2 = self.hparams.l2_loss_weight
+        reduce_mode = self.hparams.ranking_loss_reduce
+
         rr = self.hparams.ranking_regularization
         if rr > 0:
             cand, valid = self._sample_negative_candidates(user_idx)
@@ -116,7 +125,13 @@ class BiasedMFLightningModule(LightningModule):
                 scores = self(u_exp, c_flat).view(B, K)
                 max_scores, _ = scores.max(dim=1)
                 target = torch.full_like(max_scores, self.hparams.unobserved_rating_value)
-                loss_neg = F.mse_loss(max_scores[valid], target[valid])
+                per_row = F.mse_loss(max_scores, target, reduction="none")
+                if reduce_mode == "valid_mean":
+                    loss_neg = per_row[valid].mean()
+                else:
+                    # Mean over full batch; invalid rows contribute 0 (no gradient).
+                    masked = per_row * valid.to(dtype=per_row.dtype)
+                    loss_neg = masked.sum() / float(B)
                 loss_rank = rr * loss_neg
             else:
                 loss_rank = torch.zeros((), device=device)
@@ -124,11 +139,12 @@ class BiasedMFLightningModule(LightningModule):
             loss_rank = torch.zeros((), device=device)
 
         l2 = self._l2_penalty()
-        loss = loss_obs + loss_rank + l2
+        loss = w_obs * loss_obs + w_rank * loss_rank + w_l2 * l2
 
         self.log("train/loss", loss, prog_bar=True, on_step=False, on_epoch=True)
         self.log("train/loss_obs", loss_obs, prog_bar=False, on_step=False, on_epoch=True)
         self.log("train/loss_rank", loss_rank, prog_bar=False, on_step=False, on_epoch=True)
+        self.log("train/loss_l2", l2, prog_bar=False, on_step=False, on_epoch=True)
 
         return loss
 

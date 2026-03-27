@@ -48,6 +48,30 @@ def _parse_args() -> argparse.Namespace:
         help="Lightning accelerator backend.",
     )
     p.add_argument("--devices", default=1, help="Lightning devices argument.")
+    p.add_argument(
+        "--observation-loss-weight",
+        type=float,
+        default=1.0,
+        help="Scale on observed-rating MSE (tuning vs Turi-like behavior).",
+    )
+    p.add_argument(
+        "--ranking-loss-weight",
+        type=float,
+        default=1.0,
+        help="Scale on ranking regularization term.",
+    )
+    p.add_argument(
+        "--l2-loss-weight",
+        type=float,
+        default=1.0,
+        help="Scale on L2 penalty (biases + factors).",
+    )
+    p.add_argument(
+        "--ranking-loss-reduce",
+        default="valid_mean",
+        choices=("valid_mean", "batch_mean"),
+        help="How to reduce ranking MSE: over valid rows only (default) or full batch.",
+    )
     p.add_argument("--k", type=int, default=10, help="Top-k recommendations per user.")
     p.add_argument(
         "--no-exclude-known",
@@ -150,6 +174,10 @@ def main() -> None:
         invalid_target_action=args.invalid_target_action,
         accelerator=args.accelerator,
         devices=args.devices,
+        observation_loss_weight=args.observation_loss_weight,
+        ranking_loss_weight=args.ranking_loss_weight,
+        l2_loss_weight=args.l2_loss_weight,
+        ranking_loss_reduce=args.ranking_loss_reduce,
     )
     print(f"Training finished in {time.time() - t_train0:.1f}s.")
 
