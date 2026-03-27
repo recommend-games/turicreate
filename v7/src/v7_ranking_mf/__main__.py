@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+import time
 
 import polars as pl
 
@@ -63,6 +64,28 @@ def _parse_args() -> argparse.Namespace:
         default=None,
         help="Optional output path for recommendations (.csv or .ndjson).",
     )
+    p.add_argument(
+        "--predict-max-rows",
+        type=int,
+        default=0,
+        help="If >0, only score first N rows for predictions (faster). 0 means all rows.",
+    )
+    p.add_argument(
+        "--recommend-max-users",
+        type=int,
+        default=5000,
+        help="Max users to generate recommendations for (default 5000). 0 means all users.",
+    )
+    p.add_argument(
+        "--skip-predict",
+        action="store_true",
+        help="Skip prediction phase/output.",
+    )
+    p.add_argument(
+        "--skip-recommend",
+        action="store_true",
+        help="Skip recommendation phase/output.",
+    )
     p.add_argument("--quiet", action="store_true", help="Disable progress output.")
     return p.parse_args()
 
@@ -78,6 +101,7 @@ def _write_frame(df: pl.DataFrame, path: str) -> None:
 
 def main() -> None:
     args = _parse_args()
+    t0 = time.time()
     data_path = Path(args.data)
     if not data_path.exists():
         raise FileNotFoundError(f"Input file not found: {data_path}")
@@ -101,6 +125,11 @@ def main() -> None:
             f"Target column {args.target_col!r} contains {invalid_rows} null/non-finite values."
         )
 
+    print(
+        f"Starting training on {df.height} rows, "
+        f"{df[args.user_col].n_unique()} users, {df[args.item_col].n_unique()} items."
+    )
+    t_train0 = time.time()
     model = create(
         df,
         user_id=args.user_col,
@@ -122,31 +151,65 @@ def main() -> None:
         accelerator=args.accelerator,
         devices=args.devices,
     )
+    print(f"Training finished in {time.time() - t_train0:.1f}s.")
 
-    preds = model.predict(df)
-    pred_df = df.with_columns(preds.alias("prediction"))
-    rec_df = model.recommend(
-        k=args.k,
-        exclude_known=not args.no_exclude_known,
-    )
+    pred_df = None
+    if not args.skip_predict:
+        pred_rows = df.height if args.predict_max_rows <= 0 else min(df.height, args.predict_max_rows)
+        pred_input = df.head(pred_rows)
+        print(f"Starting prediction phase for {pred_rows} rows...")
+        t_pred0 = time.time()
+        preds = model.predict(pred_input)
+        pred_df = pred_input.with_columns(preds.alias("prediction"))
+        print(f"Prediction phase finished in {time.time() - t_pred0:.1f}s.")
 
-    print("Training complete.")
+    rec_df = None
+    if not args.skip_recommend:
+        all_users = df[args.user_col].unique(maintain_order=True)
+        user_count = all_users.len()
+        if args.recommend_max_users > 0:
+            users_for_rec = all_users.head(args.recommend_max_users)
+        else:
+            users_for_rec = all_users
+        print(
+            f"Starting recommendation phase for {users_for_rec.len()} users "
+            f"(total users={user_count}, k={args.k})..."
+        )
+        if args.recommend_max_users > 0 and user_count > args.recommend_max_users:
+            print(
+                "Recommendation user set was capped. "
+                "Use --recommend-max-users 0 to process all users."
+            )
+        t_rec0 = time.time()
+        rec_df = model.recommend(
+            k=args.k,
+            users=users_for_rec,
+            exclude_known=not args.no_exclude_known,
+        )
+        print(f"Recommendation phase finished in {time.time() - t_rec0:.1f}s.")
+
+    print("Run complete.")
     print(
         f"rows={df.height} (input_rows={before_rows}), "
         f"users={df[args.user_col].n_unique()}, items={df[args.item_col].n_unique()}"
     )
     print("hyperparams:", model.hyperparams)
-    print("\nPredictions sample:")
-    print(pred_df.head(10))
-    print("\nRecommendations sample:")
-    print(rec_df.head(10))
+    if pred_df is not None:
+        print("\nPredictions sample:")
+        print(pred_df.head(10))
+    if rec_df is not None:
+        print("\nRecommendations sample:")
+        print(rec_df.head(10))
 
-    if args.predictions_out:
+    if args.predictions_out and pred_df is not None:
+        print(f"Writing predictions to {args.predictions_out} ...")
         _write_frame(pred_df, args.predictions_out)
-        print(f"\nWrote predictions to {args.predictions_out}")
-    if args.recommendations_out:
+        print(f"Wrote predictions to {args.predictions_out}")
+    if args.recommendations_out and rec_df is not None:
+        print(f"Writing recommendations to {args.recommendations_out} ...")
         _write_frame(rec_df, args.recommendations_out)
         print(f"Wrote recommendations to {args.recommendations_out}")
+    print(f"Total runtime: {time.time() - t0:.1f}s.")
 
 
 if __name__ == "__main__":
