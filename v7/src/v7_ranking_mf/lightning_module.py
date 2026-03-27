@@ -63,13 +63,39 @@ class BiasedMFLightningModule(LightningModule):
             seen = self.user_seen[int(u)]
             if len(seen) >= n_items:
                 continue
-            unseen = [j for j in range(n_items) if j not in seen]
-            if not unseen:
+            draws: list[int] = []
+            draw_set: set[int] = set()
+            max_tries = max(16 * K, 64)
+            tries = 0
+            while len(draws) < K and tries < max_tries:
+                tries += 1
+                cand = int(self._sample_rng.integers(0, n_items))
+                if cand in seen or cand in draw_set:
+                    continue
+                draw_set.add(cand)
+                draws.append(cand)
+
+            # Rare fallback for dense users if rejection sampling did not fill K.
+            if len(draws) < K:
+                start = int(self._sample_rng.integers(0, n_items))
+                cur = start
+                for _ in range(n_items):
+                    if cur not in seen and cur not in draw_set:
+                        draw_set.add(cur)
+                        draws.append(cur)
+                        if len(draws) == K:
+                            break
+                    cur += 1
+                    if cur == n_items:
+                        cur = 0
+
+            if not draws:
                 continue
             valid[b] = True
-            draws = self._sample_rng.integers(0, len(unseen), size=K)
-            for kk, ix in enumerate(draws):
-                out[b, kk] = unseen[int(ix)]
+            if len(draws) < K:
+                # Pad by repeating a valid sampled item to keep shape (B, K).
+                draws.extend([draws[-1]] * (K - len(draws)))
+            out[b] = torch.tensor(draws[:K], dtype=torch.long, device=device)
 
         return out, valid
 
@@ -100,7 +126,7 @@ class BiasedMFLightningModule(LightningModule):
         l2 = self._l2_penalty()
         loss = loss_obs + loss_rank + l2
 
-        self.log("train/loss", loss, prog_bar=True, on_step=True, on_epoch=True)
+        self.log("train/loss", loss, prog_bar=True, on_step=False, on_epoch=True)
         self.log("train/loss_obs", loss_obs, prog_bar=False, on_step=False, on_epoch=True)
         self.log("train/loss_rank", loss_rank, prog_bar=False, on_step=False, on_epoch=True)
 

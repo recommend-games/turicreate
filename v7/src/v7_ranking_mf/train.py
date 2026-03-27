@@ -136,6 +136,8 @@ def create(
     solver: str = "auto",
     verbose: bool = True,
     batch_size: Optional[int] = None,
+    num_workers: int = 0,
+    invalid_target_action: str = "error",
     accelerator: str = "auto",
     devices: Union[int, str] = 1,
 ) -> RankingFactorizationRecommender:
@@ -156,6 +158,24 @@ def create(
     for col in (user_id, item_id, target):
         if col not in df.columns:
             raise ValueError(f"Missing required column: {col!r}")
+    if invalid_target_action not in {"error", "drop"}:
+        raise ValueError("invalid_target_action must be one of {'error', 'drop'}.")
+
+    # Ensure explicit ratings are numeric and finite to avoid NaN losses.
+    cast_target = pl.col(target).cast(pl.Float64, strict=False).alias(target)
+    df = df.with_columns(cast_target)
+    bad_mask = ~pl.col(target).is_finite() | pl.col(target).is_null()
+    bad_target_rows = df.filter(bad_mask).height
+    if bad_target_rows > 0 and invalid_target_action == "error":
+        raise ValueError(
+            f"Target column {target!r} contains {bad_target_rows} null/non-finite values."
+        )
+    if invalid_target_action == "drop":
+        df = df.filter(~bad_mask)
+        if df.height == 0:
+            raise ValueError(
+                f"All rows were dropped because target column {target!r} had no finite values."
+            )
 
     if unobserved_rating_value is None:
         v_ur = default_unobserved_rating_value(df, target)
@@ -183,7 +203,12 @@ def create(
         random_seed=random_seed,
     )
 
-    train_loader = make_train_dataloader(matrices, bs, random_seed)
+    train_loader = make_train_dataloader(
+        matrices,
+        bs,
+        random_seed,
+        num_workers=num_workers,
+    )
 
     trainer = L.Trainer(
         max_epochs=max_iterations,
