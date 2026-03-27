@@ -1,0 +1,10 @@
+{
+  "prediction_report": {
+    "spearman_turi_vs_v7_min": 0.7,
+    "rmse_relative_drift_max": 0.1,
+    "delta_mean_v7_minus_turi_abs_max": 0.5
+  },
+  "topk_report": {
+    "jaccard_at_10_turi_vs_v7_min": 0.2
+  }
+}
